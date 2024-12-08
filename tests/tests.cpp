@@ -7,11 +7,15 @@
 namespace cta_tests {
 using namespace ::cta;
 CTA_BEGIN_TESTS_INTERNAL(failing_tests, 1)
-CTA_TEST(nonequal, ctx) { ctx.expect_that(1, eq(2)); }
+CTA_TEST(nonequal, ctx) {
+  ctx.expect_that(1, eq(2));
+  ctx.expect_that("Hi", str_eq("Not Hi."));
+}
 CTA_END_TESTS()
 
 CTA_BEGIN_TESTS(expects)
 CTA_TEST(equality, ctx) { ctx.expect_that(1, eq(1)); }
+CTA_TEST(str_equality, ctx) { ctx.expect_that("Hello", str_eq("Hello")); }
 CTA_TEST(run_failing_tests, ctx) {
   auto results = internal::run_tests<1>();
   ctx.expect_that(results.total_tests, eq(1));

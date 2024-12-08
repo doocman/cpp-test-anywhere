@@ -197,6 +197,9 @@ public:
   }
 };
 template <typename T> constexpr eq_t<T> eq(T const &v) { return eq_t<T>(v); }
+constexpr eq_t<std::string_view> str_eq(std::string_view v) {
+  return eq_t<std::string_view>(v);
+}
 inline test_result just_run_tests() { return internal::run_tests<0>(); }
 constexpr bool failed(test_result const &r) { return r.failed != 0; }
 } // namespace cta
