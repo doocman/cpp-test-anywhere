@@ -4,13 +4,26 @@
 
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <optional>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 
-#include <iostream>
+#if __has_include(<source_location>)
+#include <source_location>
+namespace cta::etd {
+using source_location = std::source_location;
+}
+#elif __has_include(<experimental/source_location>)
+#include <experimental/source_location>
+namespace cta::etd {
+using source_location = std::experimental::source_location;
+}
+#else
+#error "No source location"
+#endif
 
 // clang-format off
 #define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)\
@@ -63,20 +76,46 @@ struct test_result {
   int total_tests{};
   int failed{};
 };
+
+constexpr void print_failed_expect(auto && /*value*/, auto && /*expectation*/,
+                                   etd::source_location const &sl) {
+  std::cout << "Expectation failed at " << sl.file_name() << ':' << sl.line()
+            << '\n';
+}
+constexpr void print_passed_expect(auto && /*value*/, auto && /*expectation*/,
+                                   etd::source_location const &sl) {
+  std::cout << "Expectation passed at " << sl.file_name() << ':' << sl.line()
+            << '\n';
+}
+
 class test_context {
   test_result &r_;
   bool failed_{};
+  bool print_failure_ = true;
+  bool print_pass_ = false;
 
 public:
   constexpr explicit test_context(test_result &r) : r_(r) {}
   template <typename Val, typename Expected>
     requires(weakly_inequality_comparable<Expected, Val> ||
              std::predicate<Expected, Val>)
-  constexpr void expect_that(Val &&v, Expected &&e) {
+  constexpr void expect_that(
+      Val &&v, Expected &&e,
+      etd::source_location const &sl = etd::source_location::current()) {
+    bool this_failed = false;
     if constexpr (weakly_inequality_comparable<Expected, Val>) {
-      failed_ |= (e != v);
+      this_failed = (e != v);
     } else if constexpr (std::predicate<Expected, Val>) {
-      failed_ |= !std::invoke(std::forward<Expected>(e), std::forward<Val>(v));
+      this_failed =
+          !std::invoke(std::forward<Expected>(e), std::forward<Val>(v));
+    }
+    if (this_failed) {
+      if (print_failure_) {
+        print_failed_expect(v, e, sl);
+      }
+      failed_ = true;
+    } else if (print_pass_) {
+      print_passed_expect(v, e, sl);
     }
   }
   ~test_context() {
@@ -85,6 +124,8 @@ public:
       ++r_.failed;
     }
   }
+  constexpr void print_failures(bool print) noexcept { print_failure_ = print; }
+  constexpr void print_passes(bool print) noexcept { print_pass_ = print; }
 };
 namespace internal {
 

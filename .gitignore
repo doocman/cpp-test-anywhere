@@ -18,7 +18,9 @@ build/
 install/
 out-*/
 cmake-build-*
-local-*/
+
+# local files and folders
+local-*
 
 CMakeUserPresets.json
 
