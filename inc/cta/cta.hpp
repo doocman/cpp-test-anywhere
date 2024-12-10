@@ -2,7 +2,10 @@
 #ifndef CTA_CTA_CTA_HPP
 #define CTA_CTA_CTA_HPP
 
+#include <algorithm>
+#include <concepts>
 #include <cstdlib>
+#include <format>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -61,6 +64,38 @@ static ::cta::internal::is_regged_t _reg;\
 // clang-format on
 
 namespace cta {
+namespace ranges {
+#if __cpp_lib_ranges_contains >= 202207L
+using std::ranges::contains_subrange;
+#else
+struct _contains_subrange {
+  template <std::forward_iterator I1, std::sentinel_for<I1> S1,
+            std::forward_iterator I2,
+            std::sentinel_for<I2> S2 class Pred = ranges::equal_to,
+            class Proj1 = std::identity, class Proj2 = std::identity>
+  constexpr bool operator()(I1 first1, S1 last1, I2 first2, S2 last2,
+                            Pred pred = {}, Proj1 proj1 = {},
+                            Proj2 proj2 = {}) const {
+    return (first2 == last2) ||
+           !ranges::search(first1, last1, first2, last2, pred, proj1, proj2)
+                .empty();
+  }
+};
+inline constexpr _contains_subrange contains_subrange{};
+#endif
+} // namespace ranges
+// I have to guess here, cppreference does not state the exact feature-test
+// macro for this.
+#if __cpp_lib_format >= 202207L
+template <typename T, typename Char>
+concept formattable = std::formattable<T, Char>;
+#else
+template <typename T, typename Char>
+concept formattable = requires(T &v, std::format_context ctx) {
+  std::formatter<std::remove_cvref_t<T>>().format(v, ctx);
+};
+#endif
+
 template <typename T, typename... Ts>
 concept direct_invocable =
     requires(T &&t, Ts &&...ts) { t(std::forward<Ts>(ts)...); };
@@ -77,15 +112,29 @@ struct test_result {
   int failed{};
 };
 
-constexpr void print_failed_expect(auto && /*value*/, auto && /*expectation*/,
-                                   etd::source_location const &sl) {
-  std::cout << "Expectation failed at " << sl.file_name() << ':' << sl.line()
-            << '\n';
+constexpr void print_reality_vs_expect(auto &&value, auto &&expectation,
+                                       auto out) {
+  if constexpr (formattable<decltype(value), char>) {
+    out = std::format_to(out, " - Value was '{}'", value);
+    if constexpr (formattable<decltype(expectation), char>) {
+      out = std::format_to(out, ", expected to be '{}'", expectation);
+    }
+    *out = '\n';
+    ++out;
+  }
 }
-constexpr void print_passed_expect(auto && /*value*/, auto && /*expectation*/,
-                                   etd::source_location const &sl) {
-  std::cout << "Expectation passed at " << sl.file_name() << ':' << sl.line()
-            << '\n';
+
+constexpr void print_failed_expect(auto &&value, auto &&expectation,
+                                   etd::source_location const &sl, auto out) {
+  out = std::format_to(out, "Expectation failed at {}:{}\n", sl.file_name(),
+                       sl.line());
+  print_reality_vs_expect(value, expectation, out);
+}
+constexpr void print_passed_expect(auto &&value, auto &&expectation,
+                                   etd::source_location const &sl, auto out) {
+  out = std::format_to(out, "Expectation passed at {}:{}\n", sl.file_name(),
+                       sl.line());
+  print_reality_vs_expect(value, expectation, out);
 }
 
 class test_context {
@@ -96,11 +145,11 @@ class test_context {
 
 public:
   constexpr explicit test_context(test_result &r) : r_(r) {}
-  template <typename Val, typename Expected>
+  template <typename Val, typename Expected, typename Out>
     requires(weakly_inequality_comparable<Expected, Val> ||
              std::predicate<Expected, Val>)
   constexpr void expect_that(
-      Val &&v, Expected &&e,
+      Val &&v, Expected &&e, Out &&o,
       etd::source_location const &sl = etd::source_location::current()) {
     bool this_failed = false;
     if constexpr (weakly_inequality_comparable<Expected, Val>) {
@@ -111,13 +160,22 @@ public:
     }
     if (this_failed) {
       if (print_failure_) {
-        print_failed_expect(v, e, sl);
+        print_failed_expect(v, e, sl, o);
       }
       failed_ = true;
     } else if (print_pass_) {
-      print_passed_expect(v, e, sl);
+      print_passed_expect(v, e, sl, o);
     }
   }
+  template <typename Val, typename Expected>
+    requires(weakly_inequality_comparable<Expected, Val> ||
+             std::predicate<Expected, Val>)
+  constexpr void expect_that(
+      Val &&v, Expected &&e,
+      etd::source_location const &sl = etd::source_location::current()) {
+    expect_that(v, e, std::ostreambuf_iterator<char>(std::cout), sl);
+  }
+
   ~test_context() {
     ++r_.total_tests;
     if (failed_) {
@@ -236,13 +294,73 @@ public:
   constexpr bool operator()(U &&rhs) const {
     return v_ == rhs;
   }
+  constexpr T const &_value() const { return v_; }
 };
 template <typename T> constexpr eq_t<T> eq(T const &v) { return eq_t<T>(v); }
 constexpr eq_t<std::string_view> str_eq(std::string_view v) {
   return eq_t<std::string_view>(v);
 }
+template <typename T> class contains_t {
+  T v_;
+
+public:
+  template <typename... Ts>
+    requires(std::constructible_from<T, Ts...>)
+  constexpr explicit contains_t(Ts &&...args) : v_(std::forward<Ts>(args)...) {}
+
+  template <typename U>
+  constexpr bool operator()(U &&lhs) const
+    requires(requires() {
+      ranges::contains_subrange(std::ranges::begin(lhs), std::ranges::end(lhs),
+                                begin(v_), end(v_));
+    })
+  {
+    return ranges::contains_subrange(std::ranges::begin(lhs),
+                                     std::ranges::end(lhs), begin(v_), end(v_));
+  }
+  constexpr T const &_value() const { return v_; }
+};
+constexpr contains_t<std::string_view> str_contains(std::string_view s) {
+  return contains_t<std::string_view>(s);
+}
+
 inline test_result just_run_tests() { return internal::run_tests<0>(); }
 constexpr bool failed(test_result const &r) { return r.failed != 0; }
+
+template <typename Out, typename M>
+constexpr auto format_matcher(Out o, std::string_view s, M const &m) {
+  return std::format_to(o, "{} {}", s, m._value());
+}
 } // namespace cta
+
+namespace std {
+template <typename T> struct formatter<cta::eq_t<T>, char> {
+  bool quoted = false;
+
+  template <class ParseContext>
+  constexpr ParseContext::iterator parse(ParseContext &ctx) {
+    return ctx.begin();
+  }
+
+  template <class FmtContext>
+  FmtContext::iterator format(cta::eq_t<T> const &s, FmtContext &ctx) const {
+    return cta::format_matcher(ctx.out(), "equal", s);
+  }
+};
+template <typename T> struct formatter<cta::contains_t<T>, char> {
+  bool quoted = false;
+
+  template <class ParseContext>
+  constexpr ParseContext::iterator parse(ParseContext &ctx) {
+    return ctx.begin();
+  }
+
+  template <class FmtContext>
+  FmtContext::iterator format(cta::contains_t<T> const &s,
+                              FmtContext &ctx) const {
+    return cta::format_matcher(ctx.out(), "contains", s);
+  }
+};
+} // namespace std
 
 #endif
