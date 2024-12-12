@@ -9,6 +9,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <streambuf>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
@@ -109,6 +110,9 @@ concept weakly_equality_comparable = requires(T const &t, U const &u) {
 };
 template <typename T>
 concept _probably_tuple = requires() { std::tuple_size<T>::value; };
+template <typename T>
+concept output_streamable =
+    requires(T const &t, std::basic_ostream<char> &o) { o << t; };
 
 template <typename Val, typename Expected>
   requires(weakly_inequality_comparable<Expected, Val> ||
@@ -131,9 +135,10 @@ concept member_format_to =
     requires(T const &t, Out &&o) { t.format_to(std::forward<Out>(o)); };
 
 template <typename T> struct _format_matcher {
-  T &t_;
-  constexpr explicit _format_matcher(T &t) : t_(t) {}
+  T t_;
+  constexpr explicit _format_matcher(T &&t) : t_(std::forward<T>(t)) {}
 };
+template <typename T> _format_matcher(T &&) -> _format_matcher<T>;
 
 struct test_result {
   int total_tests{};
@@ -142,7 +147,7 @@ struct test_result {
 
 constexpr auto print_reality_vs_expect(auto &&value, auto &&expectation,
                                        auto out) {
-  return std::format_to(out, " - Value was '{}', expected to '{}'\n",
+  return std::format_to(out, " - Value was '{}', expected '{}'\n",
                         _format_matcher(value), _format_matcher(expectation));
 }
 
@@ -374,7 +379,7 @@ public:
   }
   // constexpr T const &_value() const { return v_; }
   constexpr auto format_to(auto &&out) const {
-    return std::format_to(out, "elements are [{}]", _format_matcher(ms_));
+    return std::format_to(out, "elements are {}", _format_matcher(ms_));
   }
 };
 template <typename... Ts>
@@ -390,6 +395,27 @@ template <typename Out, typename M>
 constexpr auto format_matcher(Out o, std::string_view s, M const &m) {
   return std::format_to(o, "{} {}", s, m._value());
 }
+
+template <typename Out>
+class _iterator_ostreambuf : public std::basic_streambuf<char> {
+  Out o_;
+
+public:
+  explicit _iterator_ostreambuf(Out o) : basic_streambuf<char>(), o_(o) {}
+
+  constexpr Out &out() noexcept { return o_; }
+
+protected:
+  std::streamsize showmanyc() override {
+    return std::numeric_limits<std::streamsize>::max();
+  }
+  int_type uflow() override { return {}; }
+  std::streamsize xsgetn(char_type *, std::streamsize) override { return {}; }
+  std::streamsize xsputn(const char_type *s, std::streamsize count) override {
+    o_ = std::copy_n(s, count, o_);
+    return count;
+  }
+};
 } // namespace cta
 
 namespace std {
@@ -404,11 +430,16 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
                               FmtContext &ctx) const {
     using namespace string_view_literals;
     using raw_t = std::remove_cvref_t<T>;
-    if constexpr (::cta::member_format_to<T &, decltype(ctx.out())>) {
+    if constexpr (::cta::member_format_to<T, decltype(ctx.out())>) {
       return s.t_.format_to(ctx.out());
     } else if constexpr (::cta::formattable<raw_t, char>) {
       return formatter<raw_t, char>{}.format(s.t_, ctx);
-    } else if constexpr (std::ranges::range<std::remove_cvref_t<T>>) {
+    } else if constexpr (::cta::output_streamable<raw_t>) {
+      auto buf = ::cta::_iterator_ostreambuf(ctx.out());
+      auto stream = std::basic_ostream<char>(&buf);
+      stream << s.t_;
+      return buf.out();
+    } else if constexpr (std::ranges::range<raw_t>) {
       auto out = format_to(ctx.out(), "[");
       bool use_comma{};
       for (auto &&e : s.t_) {
@@ -417,6 +448,19 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
         } else {
           out = format_to(ctx.out(), "'{}'", ::cta::_format_matcher(e));
           use_comma = true;
+        }
+      }
+      return format_to(out, "]");
+    } else if constexpr (requires() {
+                           s.t_.size();
+                           s.t_[0];
+                         }) {
+      auto out = format_to(ctx.out(), "[");
+      auto sz = s.t_.size();
+      if (sz > 0) {
+        out = format_to(ctx.out(), "'{}'", ::cta::_format_matcher(s.t_[0]));
+        for (auto i = static_cast<decltype(sz)>(1); i < sz; ++i) {
+          out = format_to(ctx.out(), ", '{}'", ::cta::_format_matcher(s.t_[i]));
         }
       }
       return format_to(out, "]");
