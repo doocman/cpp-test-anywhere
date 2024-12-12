@@ -1,6 +1,7 @@
 
 #include <cta/cta.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -9,18 +10,20 @@
 namespace cta_tests {
 using namespace ::cta;
 static std::vector<std::string> failed_test_out{};
+static auto failed_test_print_dest() {
+  return std::back_insert_iterator(failed_test_out.emplace_back());
+}
 CTA_BEGIN_TESTS_INTERNAL(failing_tests, 1)
-CTA_TEST(nonequal, ctx) {
-  ctx.expect_that(1, eq(2),
-                  std::back_insert_iterator(failed_test_out.emplace_back()));
+CTA_TEST(nonequal, ctx) { ctx.expect_that(1, eq(2), failed_test_print_dest()); }
+CTA_TEST(nonequal_str, ctx) {
+  ctx.expect_that("Hi", str_eq("Not Hi."), failed_test_print_dest());
 }
 CTA_TEST(nonequal_str, ctx) {
-  ctx.expect_that("Hi", str_eq("Not Hi."),
-                  std::back_insert_iterator(failed_test_out.emplace_back()));
+  ctx.expect_that("Hi there", str_contains("Hi."), failed_test_print_dest());
 }
-CTA_TEST(nonequal_str, ctx) {
-  ctx.expect_that("Hi there", str_contains("Hi."),
-                  std::back_insert_iterator(failed_test_out.emplace_back()));
+CTA_TEST(no_elements_are, ctx) {
+  ctx.expect_that(std::array{1, 2, 3}, elements_are(1, 2, 4),
+                  failed_test_print_dest());
 }
 CTA_END_TESTS()
 
@@ -28,19 +31,29 @@ CTA_BEGIN_TESTS(expects)
 CTA_TEST(equality, ctx) { ctx.expect_that(1, eq(1)); }
 CTA_TEST(str_equality, ctx) { ctx.expect_that("Hello", str_eq("Hello")); }
 CTA_TEST(str_contains, ctx) { ctx.expect_that("Hello", str_contains("He")); }
+CTA_TEST(elements_are, ctx) {
+  ctx.expect_that(std::array{1, 2, 3}, elements_are(1, 2, eq(3)));
+}
 CTA_TEST(run_failing_tests, ctx) {
+  constexpr auto test_count = 4;
   auto results = internal::run_tests<1>();
-  ctx.expect_that(results.total_tests, eq(3));
+  ctx.expect_that(results.total_tests, eq(test_count));
   ctx.expect_that(results.failed, eq(results.total_tests));
-  if (size(failed_test_out) == 3) {
+  if (size(failed_test_out) == test_count) {
     ctx.expect_that(failed_test_out[0], str_contains("1"));
     ctx.expect_that(failed_test_out[0], str_contains("2"));
+    ctx.expect_that(failed_test_out[0], str_contains("equal"));
     ctx.expect_that(failed_test_out[1], str_contains("Hi"));
     ctx.expect_that(failed_test_out[1], str_contains("Not Hi."));
+    ctx.expect_that(failed_test_out[1], str_contains("equal"));
     ctx.expect_that(failed_test_out[2], str_contains("Hi there"));
     ctx.expect_that(failed_test_out[2], str_contains("Hi."));
+    ctx.expect_that(failed_test_out[2], str_contains("contain"));
+    ctx.expect_that(failed_test_out[3], str_contains("'1', '2', '3'"));
+    ctx.expect_that(failed_test_out[3], str_contains("4"));
+    ctx.expect_that(failed_test_out[3], str_contains("elements are"));
   } else {
-    ctx.expect_that(size(failed_test_out), eq(3));
+    ctx.expect_that(size(failed_test_out), eq(test_count));
   }
 }
 CTA_END_TESTS()

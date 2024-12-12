@@ -107,21 +107,43 @@ template <typename T, typename U>
 concept weakly_equality_comparable = requires(T const &t, U const &u) {
   { t == u } -> std::convertible_to<bool>;
 };
+template <typename T>
+concept _probably_tuple = requires() { std::tuple_size<T>::value; };
+
+template <typename Val, typename Expected>
+  requires(weakly_inequality_comparable<Expected, Val> ||
+           std::predicate<Expected, Val>)
+constexpr bool test_matcher(Val &&v, Expected &&e) {
+  if constexpr (weakly_inequality_comparable<Expected, Val>) {
+    return (e == v);
+  } else if constexpr (std::predicate<Expected, Val>) {
+    return std::invoke(std::forward<Expected>(e), std::forward<Val>(v));
+  }
+}
+
+template <typename E, typename V>
+concept matchable = requires(V &&v, E &&e) {
+  ::cta::test_matcher(std::forward<V>(v), std::forward<E>(e));
+};
+
+template <typename T, typename Out>
+concept member_format_to =
+    requires(T const &t, Out &&o) { t.format_to(std::forward<Out>(o)); };
+
+template <typename T> struct _format_matcher {
+  T &t_;
+  constexpr explicit _format_matcher(T &t) : t_(t) {}
+};
+
 struct test_result {
   int total_tests{};
   int failed{};
 };
 
-constexpr void print_reality_vs_expect(auto &&value, auto &&expectation,
+constexpr auto print_reality_vs_expect(auto &&value, auto &&expectation,
                                        auto out) {
-  if constexpr (formattable<decltype(value), char>) {
-    out = std::format_to(out, " - Value was '{}'", value);
-    if constexpr (formattable<decltype(expectation), char>) {
-      out = std::format_to(out, ", expected to be '{}'", expectation);
-    }
-    *out = '\n';
-    ++out;
-  }
+  return std::format_to(out, " - Value was '{}', expected to '{}'\n",
+                        _format_matcher(value), _format_matcher(expectation));
 }
 
 constexpr void print_failed_expect(auto &&value, auto &&expectation,
@@ -145,19 +167,12 @@ class test_context {
 
 public:
   constexpr explicit test_context(test_result &r) : r_(r) {}
-  template <typename Val, typename Expected, typename Out>
-    requires(weakly_inequality_comparable<Expected, Val> ||
-             std::predicate<Expected, Val>)
+  template <typename Val, matchable<Val> Expected, typename Out>
   constexpr void expect_that(
       Val &&v, Expected &&e, Out &&o,
       etd::source_location const &sl = etd::source_location::current()) {
-    bool this_failed = false;
-    if constexpr (weakly_inequality_comparable<Expected, Val>) {
-      this_failed = (e != v);
-    } else if constexpr (std::predicate<Expected, Val>) {
-      this_failed =
-          !std::invoke(std::forward<Expected>(e), std::forward<Val>(v));
-    }
+    bool this_failed =
+        !test_matcher(std::forward<Val>(v), std::forward<Expected>(e));
     if (this_failed) {
       if (print_failure_) {
         print_failed_expect(v, e, sl, o);
@@ -294,7 +309,9 @@ public:
   constexpr bool operator()(U &&rhs) const {
     return v_ == rhs;
   }
-  constexpr T const &_value() const { return v_; }
+  constexpr auto format_to(auto &&out) const {
+    return std::format_to(out, "equal to {}", _format_matcher(v_));
+  }
 };
 template <typename T> constexpr eq_t<T> eq(T const &v) { return eq_t<T>(v); }
 constexpr eq_t<std::string_view> str_eq(std::string_view v) {
@@ -318,47 +335,110 @@ public:
     return ranges::contains_subrange(std::ranges::begin(lhs),
                                      std::ranges::end(lhs), begin(v_), end(v_));
   }
-  constexpr T const &_value() const { return v_; }
+  constexpr auto format_to(auto &&out) const {
+    return std::format_to(out, "contain {}", _format_matcher(v_));
+  }
 };
 constexpr contains_t<std::string_view> str_contains(std::string_view s) {
   return contains_t<std::string_view>(s);
+}
+template <typename U, typename... Ts, std::size_t... is>
+constexpr bool _match_range_to_values(U &&u, std::index_sequence<is...>,
+                                      Ts &&...vals) {
+  return (test_matcher(std::forward<U>(u)[is], std::forward<Ts>(vals)) && ...);
+}
+template <typename U, typename Tupl, std::size_t... is>
+constexpr bool _match_range_to_tuple(U &&u, std::index_sequence<is...>,
+                                     Tupl &&matchers) {
+  return std::apply(
+      [&u]<typename... Ts>(Ts &&...ms) {
+        return _match_range_to_values(std::forward<U>(u),
+                                      std::index_sequence<is...>{},
+                                      std::forward<Ts>(ms)...);
+      },
+      matchers);
+}
+template <typename... Ts> class elements_are_t {
+  std::tuple<Ts...> ms_;
+
+public:
+  constexpr explicit elements_are_t(auto &&...ms)
+      : ms_(std::forward<decltype(ms)>(ms)...) {}
+  template <std::ranges::input_range U>
+  constexpr bool operator()(U &&lhs) const {
+    if (std::ranges::size(lhs) != sizeof...(Ts)) {
+      return false;
+    }
+    return _match_range_to_tuple(
+        std::forward<U>(lhs), std::make_index_sequence<sizeof...(Ts)>{}, ms_);
+  }
+  // constexpr T const &_value() const { return v_; }
+  constexpr auto format_to(auto &&out) const {
+    return std::format_to(out, "elements are [{}]", _format_matcher(ms_));
+  }
+};
+template <typename... Ts>
+constexpr elements_are_t<Ts...> elements_are(Ts const &...matchers) {
+  return elements_are_t<Ts...>(matchers...);
 }
 
 inline test_result just_run_tests() { return internal::run_tests<0>(); }
 constexpr bool failed(test_result const &r) { return r.failed != 0; }
 
 template <typename Out, typename M>
+  requires(requires(M &m) { m._value(); })
 constexpr auto format_matcher(Out o, std::string_view s, M const &m) {
   return std::format_to(o, "{} {}", s, m._value());
 }
 } // namespace cta
 
 namespace std {
-template <typename T> struct formatter<cta::eq_t<T>, char> {
-  bool quoted = false;
-
+template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
   template <class ParseContext>
   constexpr ParseContext::iterator parse(ParseContext &ctx) {
     return ctx.begin();
   }
 
   template <class FmtContext>
-  FmtContext::iterator format(cta::eq_t<T> const &s, FmtContext &ctx) const {
-    return cta::format_matcher(ctx.out(), "equal", s);
-  }
-};
-template <typename T> struct formatter<cta::contains_t<T>, char> {
-  bool quoted = false;
-
-  template <class ParseContext>
-  constexpr ParseContext::iterator parse(ParseContext &ctx) {
-    return ctx.begin();
-  }
-
-  template <class FmtContext>
-  FmtContext::iterator format(cta::contains_t<T> const &s,
+  FmtContext::iterator format(::cta::_format_matcher<T> const &s,
                               FmtContext &ctx) const {
-    return cta::format_matcher(ctx.out(), "contains", s);
+    using namespace string_view_literals;
+    using raw_t = std::remove_cvref_t<T>;
+    if constexpr (::cta::member_format_to<T &, decltype(ctx.out())>) {
+      return s.t_.format_to(ctx.out());
+    } else if constexpr (::cta::formattable<raw_t, char>) {
+      return formatter<raw_t, char>{}.format(s.t_, ctx);
+    } else if constexpr (std::ranges::range<std::remove_cvref_t<T>>) {
+      auto out = format_to(ctx.out(), "[");
+      bool use_comma{};
+      for (auto &&e : s.t_) {
+        if (use_comma) {
+          out = format_to(ctx.out(), ", '{}'", ::cta::_format_matcher(e));
+        } else {
+          out = format_to(ctx.out(), "'{}'", ::cta::_format_matcher(e));
+          use_comma = true;
+        }
+      }
+      return format_to(out, "]");
+    } else if constexpr (::cta::_probably_tuple<raw_t>) {
+      auto out = format_to(ctx.out(), "[");
+      if constexpr (tuple_size_v<raw_t> > 0) {
+        std::apply(
+            [&out](auto const &v0, auto const &...vals) {
+              constexpr auto format_single = [](auto &out, auto const &v) {
+                out = format_to(out, ", '{}'", ::cta::_format_matcher(v));
+                return char{};
+              };
+              out = format_to(out, "'{}'", ::cta::_format_matcher(v0));
+              using expander = char[sizeof...(vals)];
+              (void)expander{format_single(out, vals)...};
+            },
+            s.t_);
+      }
+      return format_to(out, "]");
+    } else {
+      return std::format_to(ctx.out(), "<cannot print>");
+    }
   }
 };
 } // namespace std
