@@ -29,41 +29,6 @@ using source_location = std::experimental::source_location;
 #error "No source location"
 #endif
 
-// clang-format off
-#define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)\
-struct cta_test_case_##NAME {\
-static constexpr char name[] = #NAME;\
-static ::cta::internal::is_regged_t _reg;\
- };\
-::cta::internal::is_regged_t cta_test_case_##NAME::_reg = ::cta::internal::register_tests<cta_test_case_##NAME, TAG>(cta_test_case_##NAME::name
-/// @brief Starts a new test case, serving as a container for related tests.
-/// This macro sets up the necessary infrastructure for a test suite.
-/// @param NAME The name of the test case, used for identifying it in logs or reports.
-/// @note Must be followed by one or more `CTA_TEST()` calls and concluded with `CTA_END_TESTS()`.
-/// @warning Use this macro only once per test case; it cannot be nested.
-#define CTA_BEGIN_TESTS(NAME) CTA_BEGIN_TESTS_INTERNAL(NAME, 0)
-
-
-/// @brief Defines a new test within the current test case.
-///
-/// Use this macro after `CTA_BEGIN_TESTS()` or another `CTA_TEST()` and before `CTA_END_TESTS()`.
-/// The test logic must be written inside `{}` immediately after this macro.
-/// All expectations/assertions are performed using the provided context object.
-/// @param NAME The name of the test, used for identification in logs or reports.
-/// @param CONTEXT_ARG The name of the context object accessible within the test body.
-///        This object provides shared state or utilities specific to the test.
-/// @note See tests/tests.cpp for usage examples.
-/// @warning If not followed by `{}`, a compile-time error will occur.
-#define CTA_TEST(NAME, CONTEXT_ARG) ,::cta::internal::name_of_test(#NAME)<<[] (test_context&& CONTEXT_ARG)
-
-/// @brief Concludes the current test case.
-///
-/// This macro finalizes the test infrastructure set up by `CTA_BEGIN_TESTS()`.
-/// It must be used after all `CTA_TEST()` macros in the test case.
-/// @note Omitting this macro will result in incomplete test case definition and compile-time errors.
-#define CTA_END_TESTS() );
-// clang-format on
-
 namespace cta {
 namespace ranges {
 #if __cpp_lib_ranges_contains >= 202207L
@@ -205,6 +170,36 @@ public:
   constexpr void print_failures(bool print) noexcept { print_failure_ = print; }
   constexpr void print_passes(bool print) noexcept { print_pass_ = print; }
 };
+struct empty_test_base {};
+template <typename Base>
+  requires(std::is_default_constructible_v<Base>)
+class test_wrapper : protected Base {
+  test_context &ctx_;
+
+public:
+  explicit constexpr test_wrapper(test_context &ctx) : ctx_(ctx) {}
+  template <typename L, typename R>
+    requires(requires(test_context &ctx, L &&l, R &&r) {
+      ctx.expect_that(std::forward<L>(l), std::forward<R>(r));
+    })
+  constexpr auto expect_that(
+      L &&l, R &&r,
+      etd::source_location const &sl = etd::source_location::current()) const {
+    return ctx_.expect_that(std::forward<L>(l), std::forward<R>(r), sl);
+  }
+  template <typename L, typename R, typename O>
+    requires(requires(test_context &ctx, L &&l, R &&r, O &&o) {
+      ctx.expect_that(std::forward<L>(l), std::forward<R>(r),
+                      std::forward<O>(o));
+    })
+  constexpr auto expect_that(
+      L &&l, R &&r, O &&o,
+      etd::source_location const &sl = etd::source_location::current()) const {
+    return ctx_.expect_that(std::forward<L>(l), std::forward<R>(r),
+                            std::forward<O>(o), sl);
+  }
+};
+
 namespace internal {
 
 // Tagged so that it can be used to test the framework itself.
@@ -486,5 +481,66 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
   }
 };
 } // namespace std
+
+// clang-format off
+#if 0
+#define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)\
+struct cta_test_case_##NAME {\
+static constexpr char name[] = #NAME;\
+static ::cta::internal::is_regged_t _reg;\
+ };\
+::cta::internal::is_regged_t cta_test_case_##NAME::_reg = ::cta::internal::register_tests<cta_test_case_##NAME, TAG>(cta_test_case_##NAME::name
+
+
+/// @brief Defines a new test within the current test case.
+///
+/// Use this macro after `CTA_BEGIN_TESTS()` or another `CTA_TEST()` and before `CTA_END_TESTS()`.
+/// The test logic must be written inside `{}` immediately after this macro.
+/// All expectations/assertions are performed using the provided context object.
+/// @param NAME The name of the test, used for identification in logs or reports.
+/// @param CONTEXT_ARG The name of the context object accessible within the test body.
+///        This object provides shared state or utilities specific to the test.
+/// @note See tests/tests.cpp for usage examples.
+/// @warning If not followed by `{}`, a compile-time error will occur.
+#define CTA_TEST(NAME, CONTEXT_ARG) ,::cta::internal::name_of_test(#NAME)<<[] (test_context&& CONTEXT_ARG)
+
+/// @brief Concludes the current test case.
+///
+/// This macro finalizes the test infrastructure set up by `CTA_BEGIN_TESTS()`.
+/// It must be used after all `CTA_TEST()` macros in the test case.
+/// @note Omitting this macro will result in incomplete test case definition and compile-time errors.
+#define CTA_END_TESTS() );
+#else
+#define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG) \
+namespace cta_test_##NAME {                                            \
+struct cta_test_case_##NAME : public ::cta::test_wrapper<::cta::empty_test_base> { \
+using _wrapper = ::cta::test_wrapper<::cta::empty_test_base>;                      \
+using _wrapper::_wrapper;\
+static constexpr char case_name[] = #NAME;       \
+};                                          \
+using _cta_fixture_t = cta_test_case_##NAME; \
+static constexpr int tag = TAG;             \
+
+
+#define CTA_TEST(NAME) \
+static_assert(sizeof(_cta_fixture_t) != 0, "This macro must be after a CTA_BEGIN_TESTS and before it's corresponding CTA_END_TESTS()"); \
+struct _test_tag_##NAME : _cta_fixture_t {                                                                                              \
+  using _cta_fixture_t::_cta_fixture_t;                                                                                                 \
+  void do_run_test();\
+};                                       \
+inline static auto reg_##NAME = ::cta::internal::register_tests<_cta_fixture_t, tag>(_cta_fixture_t::case_name, ::cta::internal::name_of_test(#NAME) << [] (test_context&& tc) { \
+       _test_tag_##NAME(tc).do_run_test();                                  \
+});                    \
+inline void _test_tag_##NAME::do_run_test()
+
+#define CTA_END_TESTS() }
+#endif
+/// @brief Starts a new test case, serving as a container for related tests.
+/// This macro sets up the necessary infrastructure for a test suite.
+/// @param NAME The name of the test case, used for identifying it in logs or reports.
+/// @note Must be followed by one or more `CTA_TEST()` calls and concluded with `CTA_END_TESTS()`.
+/// @warning Use this macro only once per test case; it cannot be nested.
+#define CTA_BEGIN_TESTS(NAME) CTA_BEGIN_TESTS_INTERNAL(NAME, 0)
+// clang-format on
 
 #endif
