@@ -31,6 +31,12 @@ CTA_TEST(no_elements_are_bitset) {
               failed_test_print_dest());
 }
 CTA_END_TESTS()
+struct failing_fixture {
+  int v = 1;
+};
+CTA_BEGIN_TESTS_F_INTERNAL(failing_fixture, failing_fixture, 1)
+CTA_TEST(v_is_2) { expect_that(v, eq(2), failed_test_print_dest()); }
+CTA_END_TESTS_F()
 
 CTA_BEGIN_TESTS(expects)
 CTA_TEST(equality) { expect_that(1, eq(1)); }
@@ -40,7 +46,7 @@ CTA_TEST(elements_are) {
   expect_that(std::array{1, 2, 3}, elements_are(1, 2, eq(3)));
 }
 CTA_TEST(run_failing_tests) {
-  constexpr auto test_count = 5;
+  constexpr auto test_count = 6;
   auto results = internal::run_tests<1>();
   expect_that(results.total_tests, eq(test_count));
   expect_that(results.failed, eq(results.total_tests));
@@ -59,11 +65,18 @@ CTA_TEST(run_failing_tests) {
     expect_that(failed_test_out[3], str_contains("elements are"));
     expect_that(failed_test_out[4], str_contains("0101"));
     expect_that(failed_test_out[4], str_contains("0100"));
+    expect_that(failed_test_out[5], str_contains("equal to 2"));
   } else {
     expect_that(size(failed_test_out), eq(test_count));
   }
 }
 CTA_END_TESTS()
+struct passing_fixture {
+  int v = 1;
+};
+CTA_BEGIN_TESTS_F(passing_fixture)
+CTA_TEST(check_value) { expect_that(v, eq(1)); }
+CTA_END_TESTS_F()
 } // namespace cta_tests
 
 int main(int, char **) {
