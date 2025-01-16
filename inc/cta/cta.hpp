@@ -494,7 +494,13 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 
 #define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)                                    \
   CTA_BEGIN_TESTS_F_INTERNAL(NAME, ::cta::empty_test_base, TAG)
+/// Defines a test-fixture from a struct. The struct must be
+/// default-constructible, but all setup (teardown) logic can be placed in the
+/// constructor (destructor).
 #define CTA_BEGIN_TESTS_F(NAME) CTA_BEGIN_TESTS_F_INTERNAL(NAME, NAME, 0)
+/// Generates a single test function. Define the test with '{}' afterwards.
+/// It must be used after a CTA_BEGIN_TESTS or CTA_BEGIN_TESTS_F and before
+/// a CTA_END_TESTS() or CTA_END_TESTS_F()
 #define CTA_TEST(NAME)                                                         \
   static_assert(sizeof(_cta_fixture_t) != 0,                                   \
                 "This macro must be after a CTA_BEGIN_TESTS and before it's "  \
