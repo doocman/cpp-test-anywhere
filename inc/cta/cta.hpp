@@ -482,65 +482,49 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 };
 } // namespace std
 
-// clang-format off
-#if 0
-#define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)\
-struct cta_test_case_##NAME {\
-static constexpr char name[] = #NAME;\
-static ::cta::internal::is_regged_t _reg;\
- };\
-::cta::internal::is_regged_t cta_test_case_##NAME::_reg = ::cta::internal::register_tests<cta_test_case_##NAME, TAG>(cta_test_case_##NAME::name
+#define CTA_BEGIN_TESTS_F_INTERNAL(NAME, FIXT, TAG)                            \
+  namespace cta_test_##NAME {                                                  \
+    struct cta_test_case_##NAME : public ::cta::test_wrapper<FIXT> {           \
+      using _wrapper = ::cta::test_wrapper<FIXT>;                              \
+      using _wrapper::_wrapper;                                                \
+      static constexpr char case_name[] = #NAME;                               \
+    };                                                                         \
+    using _cta_fixture_t = cta_test_case_##NAME;                               \
+    static constexpr int tag = TAG;
 
-
-/// @brief Defines a new test within the current test case.
-///
-/// Use this macro after `CTA_BEGIN_TESTS()` or another `CTA_TEST()` and before `CTA_END_TESTS()`.
-/// The test logic must be written inside `{}` immediately after this macro.
-/// All expectations/assertions are performed using the provided context object.
-/// @param NAME The name of the test, used for identification in logs or reports.
-/// @param CONTEXT_ARG The name of the context object accessible within the test body.
-///        This object provides shared state or utilities specific to the test.
-/// @note See tests/tests.cpp for usage examples.
-/// @warning If not followed by `{}`, a compile-time error will occur.
-#define CTA_TEST(NAME, CONTEXT_ARG) ,::cta::internal::name_of_test(#NAME)<<[] (test_context&& CONTEXT_ARG)
-
-/// @brief Concludes the current test case.
-///
-/// This macro finalizes the test infrastructure set up by `CTA_BEGIN_TESTS()`.
-/// It must be used after all `CTA_TEST()` macros in the test case.
-/// @note Omitting this macro will result in incomplete test case definition and compile-time errors.
-#define CTA_END_TESTS() );
-#else
-#define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG) \
-namespace cta_test_##NAME {                                            \
-struct cta_test_case_##NAME : public ::cta::test_wrapper<::cta::empty_test_base> { \
-using _wrapper = ::cta::test_wrapper<::cta::empty_test_base>;                      \
-using _wrapper::_wrapper;\
-static constexpr char case_name[] = #NAME;       \
-};                                          \
-using _cta_fixture_t = cta_test_case_##NAME; \
-static constexpr int tag = TAG;             \
-
-
-#define CTA_TEST(NAME) \
-static_assert(sizeof(_cta_fixture_t) != 0, "This macro must be after a CTA_BEGIN_TESTS and before it's corresponding CTA_END_TESTS()"); \
-struct _test_tag_##NAME : _cta_fixture_t {                                                                                              \
-  using _cta_fixture_t::_cta_fixture_t;                                                                                                 \
-  void do_run_test();\
-};                                       \
-inline static auto reg_##NAME = ::cta::internal::register_tests<_cta_fixture_t, tag>(_cta_fixture_t::case_name, ::cta::internal::name_of_test(#NAME) << [] (test_context&& tc) { \
-       _test_tag_##NAME(tc).do_run_test();                                  \
-});                    \
-inline void _test_tag_##NAME::do_run_test()
+#define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)                                    \
+  CTA_BEGIN_TESTS_F_INTERNAL(NAME, ::cta::empty_test_base, TAG)
+/// Defines a test-fixture from a struct. The struct must be
+/// default-constructible, but all setup (teardown) logic can be placed in the
+/// constructor (destructor).
+#define CTA_BEGIN_TESTS_F(NAME) CTA_BEGIN_TESTS_F_INTERNAL(NAME, NAME, 0)
+/// Generates a single test function. Define the test with '{}' afterwards.
+/// It must be used after a CTA_BEGIN_TESTS or CTA_BEGIN_TESTS_F and before
+/// a CTA_END_TESTS() or CTA_END_TESTS_F()
+#define CTA_TEST(NAME)                                                         \
+  static_assert(sizeof(_cta_fixture_t) != 0,                                   \
+                "This macro must be after a CTA_BEGIN_TESTS and before it's "  \
+                "corresponding CTA_END_TESTS()");                              \
+  struct _test_tag_##NAME : _cta_fixture_t {                                   \
+    using _cta_fixture_t::_cta_fixture_t;                                      \
+    void do_run_test();                                                        \
+  };                                                                           \
+  inline static auto reg_##NAME =                                              \
+      ::cta::internal::register_tests<_cta_fixture_t, tag>(                    \
+          _cta_fixture_t::case_name,                                           \
+          ::cta::internal::name_of_test(#NAME) <<                              \
+              [](test_context &&tc) { _test_tag_##NAME(tc).do_run_test(); });  \
+  inline void _test_tag_##NAME::do_run_test()
 
 #define CTA_END_TESTS() }
-#endif
+#define CTA_END_TESTS_F() CTA_END_TESTS()
 /// @brief Starts a new test case, serving as a container for related tests.
 /// This macro sets up the necessary infrastructure for a test suite.
-/// @param NAME The name of the test case, used for identifying it in logs or reports.
-/// @note Must be followed by one or more `CTA_TEST()` calls and concluded with `CTA_END_TESTS()`.
+/// @param NAME The name of the test case, used for identifying it in logs or
+/// reports.
+/// @note Must be followed by one or more `CTA_TEST()` calls and concluded with
+/// `CTA_END_TESTS()`.
 /// @warning Use this macro only once per test case; it cannot be nested.
 #define CTA_BEGIN_TESTS(NAME) CTA_BEGIN_TESTS_INTERNAL(NAME, 0)
-// clang-format on
 
 #endif
