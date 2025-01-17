@@ -67,7 +67,7 @@ CTA_TEST(run_failing_tests) {
     expect_that(failed_test_out[4], str_contains("0100"));
     expect_that(failed_test_out[5], str_contains("equal to 2"));
   } else {
-    expect_that(size(failed_test_out), eq(test_count));
+    expect_that(ssize(failed_test_out), eq(test_count));
   }
 }
 CTA_END_TESTS()
