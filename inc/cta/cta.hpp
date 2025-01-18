@@ -249,13 +249,22 @@ public:
   ~tests_register_t() { any_destroyed() = true; }
   constexpr void run(test_result &dest) const { test_fun_(dest); }
 };
-struct is_regged_t {};
-struct name_of_test {
-  std::string_view name;
-  constexpr explicit name_of_test(std::string_view n) : name(n) {}
+struct is_regged_t {
+  constexpr is_regged_t() noexcept = default;
+  constexpr explicit is_regged_t(auto &&...) noexcept {}
 };
-template <typename F> struct named_test {
-  std::string_view name;
+template <std::size_t str_count> struct name_of_test {
+  std::array<std::string_view, str_count> names;
+  template <std::convertible_to<std::string_view>... Ts>
+    requires(sizeof...(Ts) == str_count)
+  constexpr explicit(str_count == 1) name_of_test(Ts &&...args)
+      : names({std::string_view(args)...}) {}
+};
+
+template <typename... Ts> name_of_test(Ts...) -> name_of_test<sizeof...(Ts)>;
+
+template <typename F, typename NameType> struct named_test {
+  NameType name;
   F f;
 
   constexpr char operator()(test_result &r) const {
@@ -263,26 +272,28 @@ template <typename F> struct named_test {
     return {};
   }
 };
-template <direct_invocable<test_context &&> F>
-constexpr named_test<F> operator<<(name_of_test const &n, F func) {
-  return named_test<F>(n.name, std::move(func));
+template <direct_invocable<test_context &&> F, std::size_t str_count>
+constexpr named_test<F, name_of_test<str_count>>
+operator<<(name_of_test<str_count> const &n, F func) {
+  return named_test<F, name_of_test<str_count>>(n, std::move(func));
 }
 
-template <typename, int, typename... Ts>
-inline std::optional<std::tuple<named_test<Ts>...>> &stored_test() {
-  static std::optional<std::tuple<named_test<Ts>...>> v{};
+template <typename, int, typename... NamedTests>
+inline std::optional<std::tuple<NamedTests...>> &stored_test() {
+  static std::optional<std::tuple<NamedTests...>> v{};
   return v;
 }
-template <typename Case, int tag, typename... Ts>
-inline is_regged_t register_tests(std::string_view, named_test<Ts>... tests) {
-  stored_test<Case, tag, Ts...>() = {std::move(tests)...};
+template <typename Case, int tag, typename... Ts, typename... Ns>
+inline is_regged_t register_tests(std::string_view,
+                                  named_test<Ts, Ns>... tests) {
+  stored_test<Case, tag, named_test<Ts, Ns>...>() = {std::move(tests)...};
   static tests_register_t<tag> r([](test_result &tr) {
     std::apply(
         [&tr](auto &&...ts) {
           using expander = char[sizeof...(Ts)];
           (void)expander{ts(tr)...};
         },
-        *stored_test<Case, tag, Ts...>());
+        *stored_test<Case, tag, named_test<Ts, Ns>...>());
   });
   return {};
 }
@@ -372,7 +383,6 @@ public:
     return _match_range_to_tuple(
         std::forward<U>(lhs), std::make_index_sequence<sizeof...(Ts)>{}, ms_);
   }
-  // constexpr T const &_value() const { return v_; }
   constexpr auto format_to(auto &&out) const {
     return std::format_to(out, "elements are {}", _format_matcher(ms_));
   }
@@ -482,18 +492,44 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 };
 } // namespace std
 
+#define CTA_INTERNAL_TEST_NS(NAME) cta_test_##NAME
+
+#define CTA_INTERNAL_BEGIN_TESTS_TYPES(NAME, FIXT, TAG, ...)                   \
+  struct cta_test_case_##NAME : public ::cta::test_wrapper<FIXT> {             \
+    using _wrapper = ::cta::test_wrapper<FIXT>;                                \
+    using _wrapper::_wrapper;                                                  \
+    static constexpr char case_name[] = #NAME;                                 \
+    __VA_ARGS__                                                                \
+  };                                                                           \
+  static constexpr int tag = TAG;
+
 #define CTA_BEGIN_TESTS_F_INTERNAL(NAME, FIXT, TAG)                            \
-  namespace cta_test_##NAME {                                                  \
-    struct cta_test_case_##NAME : public ::cta::test_wrapper<FIXT> {           \
-      using _wrapper = ::cta::test_wrapper<FIXT>;                              \
-      using _wrapper::_wrapper;                                                \
-      static constexpr char case_name[] = #NAME;                               \
-    };                                                                         \
-    using _cta_fixture_t = cta_test_case_##NAME;                               \
-    static constexpr int tag = TAG;
+  namespace CTA_INTERNAL_TEST_NS(NAME) {                                       \
+  CTA_INTERNAL_BEGIN_TESTS_TYPES(NAME, FIXT, TAG)                              \
+  using _cta_fixture_t = cta_test_case_##NAME;
+
+#define CTA_BEGIN_TESTS_TF_INTERNAL(NAME, FIXT, TAG, TYPENAME)                 \
+  namespace CTA_INTERNAL_TEST_NS(NAME) {                                       \
+  inline constexpr char case_name[] = #NAME;                                   \
+  template <typename... Ts> struct _fixt_wrap {                                \
+    static constexpr int tag = TAG;                                            \
+    template <typename Tag>                                                    \
+    static constexpr void do_run_test(::cta::test_context &, Tag);             \
+    using _this_t = _fixt_wrap<Ts...>;                                         \
+    template <typename T> using _fixture = FIXT<T>;                            \
+    template <typename... Ts2, typename... Ns>                                 \
+    static ::cta::internal::is_regged_t                                        \
+    do_reg_test(std::string_view name,                                         \
+                ::cta::internal::named_test<Ts2, Ns>... tests) {               \
+      return ::cta::internal::register_tests<_this_t, tag>(                    \
+          name, std::move(tests)...);                                          \
+    }
 
 #define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)                                    \
   CTA_BEGIN_TESTS_F_INTERNAL(NAME, ::cta::empty_test_base, TAG)
+
+#define CTA_BEGIN_TESTS_TF(NAME, TYPENAME)                                     \
+  CTA_BEGIN_TESTS_TF_INTERNAL(NAME, NAME, 0, TYPENAME)
 /// Defines a test-fixture from a struct. The struct must be
 /// default-constructible, but all setup (teardown) logic can be placed in the
 /// constructor (destructor).
@@ -516,8 +552,31 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
               [](test_context &&tc) { _test_tag_##NAME(tc).do_run_test(); });  \
   inline void _test_tag_##NAME::do_run_test()
 
+/// Generates a single test function. Define the test with '{}' afterwards.
+/// It must be used after a CTA_BEGIN_TESTS_TF and before
+/// a CTA_END_TESTS_TF()
+#define CTA_TEST_T(NAME, ...)                                                  \
+  template <typename T> struct _tb_##NAME : ::cta::test_wrapper<_fixture<T>> { \
+    static_assert(                                                             \
+        !std::is_same_v<_fixture<T>, void>,                                    \
+        "This macro must be after a CTA_BEGIN_TESTS_TF and before it's "       \
+        "corresponding CTA_END_TESTS_TF()");                                   \
+    explicit _tb_##NAME(test_context &tc)                                      \
+        : ::cta::test_wrapper<_fixture<T>>(tc) {}                              \
+    using ::cta::test_wrapper<_fixture<T>>::expect_that;                       \
+    void run() { __VA_ARGS__ }                                                 \
+  };                                                                           \
+  static inline auto _reg_##NAME = ::cta::internal::is_regged_t(do_reg_test(   \
+      case_name, ::cta::internal::name_of_test(#NAME, typeid(Ts).name()) <<    \
+                     [](test_context &&tc) { _tb_##NAME<Ts>(tc).run(); })...);
+
 #define CTA_END_TESTS() }
 #define CTA_END_TESTS_F() CTA_END_TESTS()
+#define CTA_END_TESTS_TF()                                                     \
+  }                                                                            \
+  ;                                                                            \
+  }
+
 /// @brief Starts a new test case, serving as a container for related tests.
 /// This macro sets up the necessary infrastructure for a test suite.
 /// @param NAME The name of the test case, used for identifying it in logs or
@@ -526,5 +585,8 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 /// `CTA_END_TESTS()`.
 /// @warning Use this macro only once per test case; it cannot be nested.
 #define CTA_BEGIN_TESTS(NAME) CTA_BEGIN_TESTS_INTERNAL(NAME, 0)
+
+#define CTA_TYPED_TEST(NAME, ...)                                              \
+  template struct CTA_INTERNAL_TEST_NS(NAME)::_fixt_wrap<__VA_ARGS__>;
 
 #endif

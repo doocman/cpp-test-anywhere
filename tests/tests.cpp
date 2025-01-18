@@ -77,6 +77,20 @@ struct passing_fixture {
 CTA_BEGIN_TESTS_F(passing_fixture)
 CTA_TEST(check_value) { expect_that(v, eq(1)); }
 CTA_END_TESTS_F()
+template <typename T> struct passing_typed_fixture {
+  T v = T{1};
+};
+CTA_BEGIN_TESTS_TF(passing_typed_fixture, T)
+CTA_TEST_T(check_value, {
+  expect_that(this->v, eq(T{1}));
+  expect_that(std::is_same_v<T, int> || std::is_same_v<T, long>, eq(true));
+})
+CTA_END_TESTS_TF()
+CTA_TYPED_TEST(passing_typed_fixture, int, long)
+
+namespace CTA_INTERNAL_TEST_NS(passing_typed_fixture) {
+// template struct _fixt_wrap<int>;
+}
 } // namespace cta_tests
 
 int main(int, char **) {
