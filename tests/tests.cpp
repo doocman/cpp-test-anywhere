@@ -37,6 +37,16 @@ struct failing_fixture {
 CTA_BEGIN_TESTS_F_INTERNAL(failing_fixture, failing_fixture, 1)
 CTA_TEST(v_is_2) { expect_that(v, eq(2), failed_test_print_dest()); }
 CTA_END_TESTS_F()
+template <typename T> struct failing_typed_fixture {
+  T value{};
+};
+CTA_BEGIN_TESTS_TF_INTERNAL(failing_typed_fixture, failing_typed_fixture, 1)
+CTA_TEST_T(type_is_void, {
+  expect_that(std::is_same_v<decltype(this->value), void>, true,
+              failed_test_print_dest());
+})
+CTA_END_TESTS_TF()
+CTA_TYPED_TEST(failing_typed_fixture, int, long)
 
 CTA_BEGIN_TESTS(expects)
 CTA_TEST(equality) { expect_that(1, eq(1)); }
@@ -46,7 +56,7 @@ CTA_TEST(elements_are) {
   expect_that(std::array{1, 2, 3}, elements_are(1, 2, eq(3)));
 }
 CTA_TEST(run_failing_tests) {
-  constexpr auto test_count = 6;
+  constexpr auto test_count = 8;
   auto results = internal::run_tests<1>();
   expect_that(results.total_tests, eq(test_count));
   expect_that(results.failed, eq(results.total_tests));
@@ -80,7 +90,7 @@ CTA_END_TESTS_F()
 template <typename T> struct passing_typed_fixture {
   T v = T{1};
 };
-CTA_BEGIN_TESTS_TF(passing_typed_fixture, T)
+CTA_BEGIN_TESTS_TF(passing_typed_fixture)
 CTA_TEST_T(check_value, {
   expect_that(this->v, eq(T{1}));
   expect_that(std::is_same_v<T, int> || std::is_same_v<T, long>, eq(true));

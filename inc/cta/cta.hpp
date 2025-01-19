@@ -173,7 +173,7 @@ public:
 struct empty_test_base {};
 template <typename Base>
   requires(std::is_default_constructible_v<Base>)
-class test_wrapper : protected Base {
+class test_wrapper : public Base {
   test_context &ctx_;
 
 public:
@@ -508,7 +508,7 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
   CTA_INTERNAL_BEGIN_TESTS_TYPES(NAME, FIXT, TAG)                              \
   using _cta_fixture_t = cta_test_case_##NAME;
 
-#define CTA_BEGIN_TESTS_TF_INTERNAL(NAME, FIXT, TAG, TYPENAME)                 \
+#define CTA_BEGIN_TESTS_TF_INTERNAL(NAME, FIXT, TAG)                           \
   namespace CTA_INTERNAL_TEST_NS(NAME) {                                       \
   inline constexpr char case_name[] = #NAME;                                   \
   template <typename... Ts> struct _fixt_wrap {                                \
@@ -528,8 +528,7 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 #define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)                                    \
   CTA_BEGIN_TESTS_F_INTERNAL(NAME, ::cta::empty_test_base, TAG)
 
-#define CTA_BEGIN_TESTS_TF(NAME, TYPENAME)                                     \
-  CTA_BEGIN_TESTS_TF_INTERNAL(NAME, NAME, 0, TYPENAME)
+#define CTA_BEGIN_TESTS_TF(NAME) CTA_BEGIN_TESTS_TF_INTERNAL(NAME, NAME, 0)
 /// Defines a test-fixture from a struct. The struct must be
 /// default-constructible, but all setup (teardown) logic can be placed in the
 /// constructor (destructor).
