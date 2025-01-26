@@ -5,6 +5,7 @@
 #include <bitset>
 #include <cstdlib>
 #include <iostream>
+#include <print>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,16 @@ static std::vector<std::string> failed_test_out{};
 static auto failed_test_print_dest() {
   return std::back_insert_iterator(failed_test_out.emplace_back());
 }
+CTA_BEGIN_TESTS_INTERNAL(first_failure, 2)
+CTA_TEST(true_is_false) {
+  print_failures(false);
+  expect_that(true, eq(false));
+}
+CTA_END_TESTS()
+CTA_BEGIN_TESTS_INTERNAL(first_success, 3)
+CTA_TEST(true_is_true) { expect_that(true, eq(true)); }
+CTA_END_TESTS()
+
 CTA_BEGIN_TESTS_INTERNAL(failing_tests, 1)
 CTA_TEST(nonequal) { expect_that(1, eq(2), failed_test_print_dest()); }
 CTA_TEST(nonequal_str) {
@@ -41,7 +52,8 @@ template <typename T> struct failing_typed_fixture {
   T value{};
   CTA_BEGIN_TESTS_TF()
   CTA_TEST_T(type_is_void) {
-    expect_that(std::is_same_v<decltype(value), void>, eq(true), failed_test_print_dest());
+    expect_that(std::is_same_v<decltype(value), void>, eq(true),
+                failed_test_print_dest());
   }
   CTA_END_TESTS_TF()
 };
@@ -69,7 +81,7 @@ CTA_TEST(run_failing_tests) {
     expect_that(failed_test_out[2], str_contains("Hi there"));
     expect_that(failed_test_out[2], str_contains("Hi."));
     expect_that(failed_test_out[2], str_contains("contain"));
-    expect_that(failed_test_out[3], str_contains("1, 2, 3"));
+    expect_that(failed_test_out[3], str_contains("'1', '2', '3'"));
     expect_that(failed_test_out[3], str_contains("4"));
     expect_that(failed_test_out[3], str_contains("elements are"));
     expect_that(failed_test_out[4], str_contains("0101"));
@@ -89,29 +101,34 @@ CTA_END_TESTS_F()
 
 template <typename T> struct passing_typed_fixture {
   T v = T{1};
+  CTA_BEGIN_TESTS_TF()
+  CTA_TEST_T(check_value) { expect_that(this->v, eq(T{1})); }
+  CTA_TEST_T(check_value_type) {
+    expect_that(std::is_same_v<T, int> || std::is_same_v<T, long>, eq(true));
+  }
+  CTA_END_TESTS_TF()
 };
-/*
-CTA_BEGIN_TESTS_TF(passing_typed_fixture)
-CTA_TEST_T(check_value, {
-  expect_that(this->v, eq(T{1}));
-  expect_that(std::is_same_v<T, int> || std::is_same_v<T, long>, eq(true));
-})
-CTA_END_TESTS_TF()
-CTA_TYPED_TEST(passing_typed_fixture, int, long)
-*/
+CTA_TYPED_ALIAS_TEST(passing_typed_fixture, types<int, long>)
 
-namespace CTA_INTERNAL_TEST_NS(passing_typed_fixture) {
-// template struct _fixt_wrap<int>;
-}
 } // namespace cta_tests
 
 int main(int, char **) {
-  auto *test_reg_first = cta::internal::tests_register_t<0>::first();
-  if (test_reg_first == nullptr) {
-    std::cout << "No tests registered\n";
+  auto test_result = cta::internal::run_tests<2>();
+  if (test_result.failed != 1 || test_result.total_tests != 1) {
+    std::print("Wrong count on first fail tests, expected 1 test that failed, "
+               "got {}/{}\n",
+               test_result.failed, test_result.total_tests);
     return EXIT_FAILURE;
   }
-  auto test_result = cta::just_run_tests();
+  test_result = cta::internal::run_tests<3>();
+  if (test_result.failed != 0 || test_result.total_tests != 1) {
+    std::print("Wrong count on first success tests, expected 0 test that "
+               "failed and 1 total, got {}/{}\n",
+               test_result.failed, test_result.total_tests);
+    return EXIT_FAILURE;
+  }
+
+  test_result = cta::just_run_tests();
   if (test_result.total_tests == 0) {
     std::cout << "No tests run\n";
     return EXIT_FAILURE;

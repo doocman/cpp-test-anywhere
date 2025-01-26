@@ -17,6 +17,39 @@
 
 #if __has_include(<source_location>)
 #include <source_location>
+
+#define CTA_INTERNAL_GEN_CTX_EXPECT_METHODS(CTX)                               \
+  template <typename L, typename R>                                            \
+    requires(requires(test_context &ctx, L &&l, R &&r) {                       \
+      (CTX).expect_that(std::forward<L>(l), std::forward<R>(r));               \
+    })                                                                         \
+  constexpr auto expect_that(L &&l, R &&r,                                     \
+                             etd::source_location const &sl =                  \
+                                 etd::source_location::current()) const {      \
+    return (CTX).expect_that(std::forward<L>(l), std::forward<R>(r), sl);      \
+  }                                                                            \
+                                                                               \
+  template <typename L, typename R, typename O>                                \
+    requires(requires(test_context &ctx, L &&l, R &&r, O &&o) {                \
+      (CTX).expect_that(std::forward<L>(l), std::forward<R>(r),                \
+                        std::forward<O>(o));                                   \
+    })                                                                         \
+  constexpr auto expect_that(L &&l, R &&r, O &&o,                              \
+                             etd::source_location const &sl =                  \
+                                 etd::source_location::current()) const {      \
+    return (CTX).expect_that(std::forward<L>(l), std::forward<R>(r),           \
+                             std::forward<O>(o), sl);                          \
+  }
+
+#define CTA_INTERNAL_GEN_CTX_METHODS(CTX)                                      \
+  CTA_INTERNAL_GEN_CTX_EXPECT_METHODS(CTX)                                     \
+  constexpr void print_failures(bool print) noexcept {                         \
+    (CTX).print_failures(print);                                               \
+  }                                                                            \
+  constexpr void print_passes(bool print) noexcept {                           \
+    (CTX).print_passes(print);                                                 \
+  }
+
 namespace cta::etd {
 using source_location = std::source_location;
 }
@@ -30,6 +63,11 @@ using source_location = std::experimental::source_location;
 #endif
 
 namespace cta {
+constexpr void cta_assert(bool cond) {
+  if (!cond) [[unlikely]] {
+    std::abort();
+  }
+}
 namespace ranges {
 #if __cpp_lib_ranges_contains >= 202207L
 using std::ranges::contains_subrange;
@@ -79,8 +117,7 @@ template <typename T>
 concept output_streamable =
     requires(T const &t, std::basic_ostream<char> &o) { o << t; };
 
-template <typename...>
-struct types {};
+template <typename...> struct types {};
 
 template <typename Val, typename Expected>
   requires(weakly_inequality_comparable<Expected, Val> ||
@@ -104,8 +141,10 @@ concept member_format_to =
 
 template <typename T> struct _format_matcher {
   T t_;
+
   constexpr explicit _format_matcher(T &&t) : t_(std::forward<T>(t)) {}
 };
+
 template <typename T> _format_matcher(T &&) -> _format_matcher<T>;
 
 struct test_result {
@@ -125,6 +164,7 @@ constexpr void print_failed_expect(auto &&value, auto &&expectation,
                        sl.line());
   print_reality_vs_expect(value, expectation, out);
 }
+
 constexpr void print_passed_expect(auto &&value, auto &&expectation,
                                    etd::source_location const &sl, auto out) {
   out = std::format_to(out, "Expectation passed at {}:{}\n", sl.file_name(),
@@ -140,6 +180,7 @@ class test_context {
 
 public:
   constexpr explicit test_context(test_result &r) : r_(r) {}
+
   template <typename Val, matchable<Val> Expected, typename Out>
   constexpr void expect_that(
       Val &&v, Expected &&e, Out &&o,
@@ -155,6 +196,7 @@ public:
       print_passed_expect(v, e, sl, o);
     }
   }
+
   template <typename Val, typename Expected>
     requires(weakly_inequality_comparable<Expected, Val> ||
              std::predicate<Expected, Val>)
@@ -170,10 +212,13 @@ public:
       ++r_.failed;
     }
   }
+
   constexpr void print_failures(bool print) noexcept { print_failure_ = print; }
   constexpr void print_passes(bool print) noexcept { print_pass_ = print; }
 };
+
 struct empty_test_base {};
+
 template <typename Base>
   requires(std::is_default_constructible_v<Base>)
 class test_wrapper : public Base {
@@ -181,30 +226,11 @@ class test_wrapper : public Base {
 
 public:
   explicit constexpr test_wrapper(test_context &ctx) : ctx_(ctx) {}
-  template <typename L, typename R>
-    requires(requires(test_context &ctx, L &&l, R &&r) {
-      ctx.expect_that(std::forward<L>(l), std::forward<R>(r));
-    })
-  constexpr auto expect_that(
-      L &&l, R &&r,
-      etd::source_location const &sl = etd::source_location::current()) const {
-    return ctx_.expect_that(std::forward<L>(l), std::forward<R>(r), sl);
-  }
-  template <typename L, typename R, typename O>
-    requires(requires(test_context &ctx, L &&l, R &&r, O &&o) {
-      ctx.expect_that(std::forward<L>(l), std::forward<R>(r),
-                      std::forward<O>(o));
-    })
-  constexpr auto expect_that(
-      L &&l, R &&r, O &&o,
-      etd::source_location const &sl = etd::source_location::current()) const {
-    return ctx_.expect_that(std::forward<L>(l), std::forward<R>(r),
-                            std::forward<O>(o), sl);
-  }
+
+  CTA_INTERNAL_GEN_CTX_METHODS(ctx_)
 };
 
 namespace internal {
-
 // Tagged so that it can be used to test the framework itself.
 template <int = 0> class tests_register_t {
   using run_test_fun = std::add_pointer_t<void(test_result &)>;
@@ -222,15 +248,18 @@ private:
     static bool v{};
     return v;
   }
+
   static void maybe_panic() {
     if (any_destroyed()) {
       std::abort();
     }
   }
+
   static std::add_lvalue_reference_t<tests_register_t *> last() {
     static tests_register_t *v{};
     return v;
   }
+
   static void add_register(tests_register_t &new_r) {
     maybe_panic();
     auto &l = last();
@@ -244,33 +273,40 @@ private:
 
 public:
   constexpr tests_register_t *next() const noexcept { return next_; }
+
   explicit tests_register_t(run_test_fun f) : test_fun_(f) {
     add_register(*this);
   }
+
   tests_register_t(tests_register_t &&) = delete;
+
   tests_register_t operator=(tests_register_t &&) = delete;
+
   ~tests_register_t() { any_destroyed() = true; }
   constexpr void run(test_result &dest) const { test_fun_(dest); }
 };
+
 struct is_regged_t {
   constexpr is_regged_t() noexcept = default;
+
   constexpr explicit is_regged_t(auto &&...) noexcept {}
 };
 
 template <typename F, typename... Ts>
-  requires((std::invocable<F&, types<Ts>> && ...))
-constexpr is_regged_t expand_types(F&& f, types<Ts...>) {
-  constexpr auto do_call = [] (auto& f, auto types) {
+// requires((std::invocable<F &, types<Ts>> && ...))
+constexpr is_regged_t expand_types(F &&f, types<Ts...>) {
+  constexpr auto do_call = [](auto &f, auto types) {
     f(types);
     return is_regged_t{};
   };
   using expander = is_regged_t[sizeof...(Ts)];
-  (void)expander(do_call(f, types<Ts>{})...);
+  (void)expander{do_call(f, types<Ts>{})...};
   return {};
 }
 
 template <std::size_t str_count> struct name_of_test {
   std::array<std::string_view, str_count> names;
+
   template <std::convertible_to<std::string_view>... Ts>
     requires(sizeof...(Ts) == str_count)
   constexpr explicit(str_count == 1) name_of_test(Ts &&...args)
@@ -278,6 +314,35 @@ template <std::size_t str_count> struct name_of_test {
 };
 
 template <typename... Ts> name_of_test(Ts...) -> name_of_test<sizeof...(Ts)>;
+
+template <std::size_t length> struct ct_string {
+  std::array<char, length> name;
+  using string_t = char[length];
+
+  consteval ct_string(string_t const &s) {
+    using std::begin, std::end;
+    std::copy(begin(s), end(s), begin(name));
+  }
+
+  consteval explicit(false) operator std::string_view() const noexcept {
+    return {begin(name), end(name) - 1};
+  }
+
+  consteval bool operator==(ct_string const &) const = default;
+  consteval auto operator<=>(ct_string const &) const = default;
+};
+
+template <ct_string _name> struct name_of_typed_test {
+  constexpr name_of_typed_test() = default;
+  constexpr explicit(false) name_of_typed_test(auto &&...) {}
+
+  static constexpr auto ct_name = _name;
+};
+
+template <typename T>
+concept has_ct_name = requires() { std::remove_cvref_t<T>::ct_name; };
+template <typename T>
+constexpr auto ct_name_of = std::remove_cvref_t<T>::ct_name;
 
 template <typename F, typename NameType> struct named_test {
   NameType name;
@@ -288,10 +353,36 @@ template <typename F, typename NameType> struct named_test {
     return {};
   }
 };
+
+template <direct_invocable<> F, ct_string name> struct named_typed_test {
+
+  template <typename T>
+    requires(requires(T &t) {
+      { t._cta_ctx } -> std::convertible_to<test_context *>;
+    })
+  static constexpr is_regged_t invoke(types<T>, test_context &ctx) {
+    auto fixture = T();
+    fixture._cta_ctx = &ctx;
+    std::invoke(std::bit_cast<F>(&fixture));
+    return {};
+  }
+
+  template <typename T> static constexpr auto to_test(types<T>) {
+    return name_of_test(std::string_view(name))
+           << [](test_context &&ctx) { invoke(types<T>{}, ctx); };
+  }
+};
+
 template <direct_invocable<test_context &&> F, std::size_t str_count>
 constexpr named_test<F, name_of_test<str_count>>
 operator<<(name_of_test<str_count> const &n, F func) {
   return named_test<F, name_of_test<str_count>>(n, std::move(func));
+}
+
+template <typename /*direct_invocable<>*/ F, has_ct_name NameGiver>
+  requires(sizeof(F) == sizeof(void *))
+constexpr auto operator<<(NameGiver, F const &) {
+  return named_typed_test<F, ct_name_of<NameGiver>>{};
 }
 
 template <typename, int, typename... NamedTests>
@@ -299,6 +390,7 @@ inline std::optional<std::tuple<NamedTests...>> &stored_test() {
   static std::optional<std::tuple<NamedTests...>> v{};
   return v;
 }
+
 template <typename Case, int tag, typename... Ts, typename... Ns>
 inline is_regged_t register_tests(std::string_view,
                                   named_test<Ts, Ns>... tests) {
@@ -313,6 +405,7 @@ inline is_regged_t register_tests(std::string_view,
   });
   return {};
 }
+
 template <int tag> inline test_result run_tests() {
   test_result r{};
   auto *test_reg = tests_register_t<tag>::first();
@@ -322,28 +415,30 @@ template <int tag> inline test_result run_tests() {
   }
   return r;
 }
-template <typename... Ts>
-struct test_definitions {
+
+template <typename... Ts> struct test_definitions {
   constexpr test_definitions() noexcept = default;
-  constexpr explicit test_definitions(auto&&...) noexcept {}
 
-  template <typename Fixt, int tag>
-  static constexpr void register_tests() {
+  constexpr explicit test_definitions(auto &&...) noexcept {}
 
+  template <typename Fixt, int tag> static constexpr void register_tests() {
+    ::cta::internal::register_tests<Fixt, tag>(typeid(Fixt).name(),
+                                               Ts::to_test(types<Fixt>{})...);
   }
 };
-template <typename... Ts>
-test_definitions(Ts&&...) -> test_definitions<std::remove_cvref_t<Ts>...>;
 
-template<template <typename> typename Fixt, typename Types, int tag>
+template <typename... Ts>
+test_definitions(int, Ts &&...) -> test_definitions<std::remove_cvref_t<Ts>...>;
+
+template <template <typename> typename Fixt, typename Types, int tag>
 constexpr is_regged_t instantiate_typed_tests() {
-  auto constexpr reg_fixture = [] <typename T> (types<T>) {
-    using collection_t = decltype(std::declval<Fixt<T>>()._cta_get_test_definitions());
+  auto constexpr reg_fixture = []<typename T>(types<T>) {
+    using collection_t =
+        decltype(std::declval<Fixt<T>>()._cta_get_test_definitions());
     collection_t::template register_tests<Fixt<T>, tag>();
   };
-  return {};
+  return expand_types(reg_fixture, Types{});
 }
-
 } // namespace internal
 template <typename T> class eq_t {
   T v_;
@@ -358,14 +453,18 @@ public:
   constexpr bool operator()(U &&rhs) const {
     return v_ == rhs;
   }
+
   constexpr auto format_to(auto &&out) const {
     return std::format_to(out, "equal to {}", _format_matcher(v_));
   }
 };
+
 template <typename T> constexpr eq_t<T> eq(T const &v) { return eq_t<T>(v); }
+
 constexpr eq_t<std::string_view> str_eq(std::string_view v) {
   return eq_t<std::string_view>(v);
 }
+
 template <typename T> class contains_t {
   T v_;
 
@@ -384,18 +483,22 @@ public:
     return ranges::contains_subrange(std::ranges::begin(lhs),
                                      std::ranges::end(lhs), begin(v_), end(v_));
   }
+
   constexpr auto format_to(auto &&out) const {
     return std::format_to(out, "contain {}", _format_matcher(v_));
   }
 };
+
 constexpr contains_t<std::string_view> str_contains(std::string_view s) {
   return contains_t<std::string_view>(s);
 }
+
 template <typename U, typename... Ts, std::size_t... is>
 constexpr bool _match_range_to_values(U &&u, std::index_sequence<is...>,
                                       Ts &&...vals) {
   return (test_matcher(std::forward<U>(u)[is], std::forward<Ts>(vals)) && ...);
 }
+
 template <typename U, typename Tupl, std::size_t... is>
 constexpr bool _match_range_to_tuple(U &&u, std::index_sequence<is...>,
                                      Tupl &&matchers) {
@@ -407,12 +510,14 @@ constexpr bool _match_range_to_tuple(U &&u, std::index_sequence<is...>,
       },
       matchers);
 }
+
 template <typename... Ts> class elements_are_t {
   std::tuple<Ts...> ms_;
 
 public:
   constexpr explicit elements_are_t(auto &&...ms)
       : ms_(std::forward<decltype(ms)>(ms)...) {}
+
   template <std::ranges::input_range U>
   constexpr bool operator()(U &&lhs) const {
     if (std::ranges::size(lhs) != sizeof...(Ts)) {
@@ -421,10 +526,12 @@ public:
     return _match_range_to_tuple(
         std::forward<U>(lhs), std::make_index_sequence<sizeof...(Ts)>{}, ms_);
   }
+
   constexpr auto format_to(auto &&out) const {
     return std::format_to(out, "elements are {}", _format_matcher(ms_));
   }
 };
+
 template <typename... Ts>
 constexpr elements_are_t<Ts...> elements_are(Ts const &...matchers) {
   return elements_are_t<Ts...>(matchers...);
@@ -452,8 +559,10 @@ protected:
   std::streamsize showmanyc() override {
     return std::numeric_limits<std::streamsize>::max();
   }
+
   int_type uflow() override { return {}; }
   std::streamsize xsgetn(char_type *, std::streamsize) override { return {}; }
+
   std::streamsize xsputn(const char_type *s, std::streamsize count) override {
     o_ = std::copy_n(s, count, o_);
     return count;
@@ -566,10 +675,15 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 #define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)                                    \
   CTA_BEGIN_TESTS_F_INTERNAL(NAME, ::cta::empty_test_base, TAG)
 
-#define CTA_BEGIN_TESTS_TF() \
-  constexpr auto _cta_get_test_definitions() { \
-  return decltype(::cta::internal::test_definitions(0                           \
-
+#define CTA_BEGIN_TESTS_TF()                                                   \
+  ::cta::test_context *_cta_ctx;                                               \
+  constexpr ::cta::test_context &cta_ctx() const {                             \
+    ::cta::cta_assert(_cta_ctx != nullptr);                                    \
+    return *_cta_ctx;                                                          \
+  }                                                                            \
+  CTA_INTERNAL_GEN_CTX_EXPECT_METHODS(*_cta_ctx)                               \
+  constexpr auto _cta_get_test_definitions() {                                 \
+  return decltype(::cta::internal::test_definitions(0
 
 /// Defines a test-fixture from a struct. The struct must be
 /// default-constructible, but all setup (teardown) logic can be placed in the
@@ -596,12 +710,13 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 /// Generates a single test function. Define the test with '{}' afterwards.
 /// It must be used after a CTA_BEGIN_TESTS_TF and before
 /// a CTA_END_TESTS_TF()
-#define CTA_TEST_T(NAME, ...) \
-  , ::cta::internal::name_of_typed_test(#NAME) << [this] ()
+#define CTA_TEST_T(NAME, ...)                                                  \
+  , ::cta::internal::name_of_typed_test<#NAME>{} << [this]()
 
 #define CTA_END_TESTS() }
 #define CTA_END_TESTS_F() CTA_END_TESTS()
-#define CTA_END_TESTS_TF() )){};}
+#define CTA_END_TESTS_TF() )){};                                               \
+  }
 
 /// @brief Starts a new test case, serving as a container for related tests.
 /// This macro sets up the necessary infrastructure for a test suite.
@@ -612,10 +727,15 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 /// @warning Use this macro only once per test case; it cannot be nested.
 #define CTA_BEGIN_TESTS(NAME) CTA_BEGIN_TESTS_INTERNAL(NAME, 0)
 
-#define CTA_TYPED_TEST_INTERNAL(FIXT, TAG, ...) \
-inline static auto _cta_reg_##FIXT = ::cta::internal::instantiate_typed_tests<FIXT, ::cta::types<__VA_ARGS__>, TAG>();
+#define CTA_TYPED_ALIAS_TEST_INTERNAL(FIXT, TAG, ...)                          \
+  inline static auto _cta_reg_##FIXT =                                         \
+      ::cta::internal::instantiate_typed_tests<FIXT, __VA_ARGS__, TAG>();
 
-#define CTA_TYPED_TEST(NAME, ...)                                              \
-  template struct CTA_INTERNAL_TEST_NS(NAME)::_fixt_wrap<__VA_ARGS__>;
+#define CTA_TYPED_TEST_INTERNAL(FIXT, TAG, ...)                                \
+  CTA_TYPED_ALIAS_TEST_INTERNAL(FIXT, TAG, ::cta::types<__VA_ARGS__>)
+
+#define CTA_TYPED_TEST(NAME, ...) CTA_TYPED_TEST_INTERNAL(NAME, 0, __VA_ARGS__)
+#define CTA_TYPED_ALIAS_TEST(NAME, ...)                                        \
+  CTA_TYPED_ALIAS_TEST_INTERNAL(NAME, 0, __VA_ARGS__)
 
 #endif
