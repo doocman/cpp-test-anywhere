@@ -79,6 +79,9 @@ template <typename T>
 concept output_streamable =
     requires(T const &t, std::basic_ostream<char> &o) { o << t; };
 
+template <typename...>
+struct types {};
+
 template <typename Val, typename Expected>
   requires(weakly_inequality_comparable<Expected, Val> ||
            std::predicate<Expected, Val>)
@@ -253,6 +256,19 @@ struct is_regged_t {
   constexpr is_regged_t() noexcept = default;
   constexpr explicit is_regged_t(auto &&...) noexcept {}
 };
+
+template <typename F, typename... Ts>
+  requires((std::invocable<F&, types<Ts>> && ...))
+constexpr is_regged_t expand_types(F&& f, types<Ts...>) {
+  constexpr auto do_call = [] (auto& f, auto types) {
+    f(types);
+    return is_regged_t{};
+  };
+  using expander = is_regged_t[sizeof...(Ts)];
+  (void)expander(do_call(f, types<Ts>{})...);
+  return {};
+}
+
 template <std::size_t str_count> struct name_of_test {
   std::array<std::string_view, str_count> names;
   template <std::convertible_to<std::string_view>... Ts>
@@ -306,6 +322,28 @@ template <int tag> inline test_result run_tests() {
   }
   return r;
 }
+template <typename... Ts>
+struct test_definitions {
+  constexpr test_definitions() noexcept = default;
+  constexpr explicit test_definitions(auto&&...) noexcept {}
+
+  template <typename Fixt, int tag>
+  static constexpr void register_tests() {
+
+  }
+};
+template <typename... Ts>
+test_definitions(Ts&&...) -> test_definitions<std::remove_cvref_t<Ts>...>;
+
+template<template <typename> typename Fixt, typename Types, int tag>
+constexpr is_regged_t instantiate_typed_tests() {
+  auto constexpr reg_fixture = [] <typename T> (types<T>) {
+    using collection_t = decltype(std::declval<Fixt<T>>()._cta_get_test_definitions());
+    collection_t::template register_tests<Fixt<T>, tag>();
+  };
+  return {};
+}
+
 } // namespace internal
 template <typename T> class eq_t {
   T v_;
@@ -528,7 +566,11 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 #define CTA_BEGIN_TESTS_INTERNAL(NAME, TAG)                                    \
   CTA_BEGIN_TESTS_F_INTERNAL(NAME, ::cta::empty_test_base, TAG)
 
-#define CTA_BEGIN_TESTS_TF(NAME) CTA_BEGIN_TESTS_TF_INTERNAL(NAME, NAME, 0)
+#define CTA_BEGIN_TESTS_TF() \
+  constexpr auto _cta_get_test_definitions() { \
+  return decltype(::cta::internal::test_definitions(0                           \
+
+
 /// Defines a test-fixture from a struct. The struct must be
 /// default-constructible, but all setup (teardown) logic can be placed in the
 /// constructor (destructor).
@@ -554,27 +596,12 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 /// Generates a single test function. Define the test with '{}' afterwards.
 /// It must be used after a CTA_BEGIN_TESTS_TF and before
 /// a CTA_END_TESTS_TF()
-#define CTA_TEST_T(NAME, ...)                                                  \
-  template <typename T> struct _tb_##NAME : ::cta::test_wrapper<_fixture<T>> { \
-    static_assert(                                                             \
-        !std::is_same_v<_fixture<T>, void>,                                    \
-        "This macro must be after a CTA_BEGIN_TESTS_TF and before it's "       \
-        "corresponding CTA_END_TESTS_TF()");                                   \
-    explicit _tb_##NAME(test_context &tc)                                      \
-        : ::cta::test_wrapper<_fixture<T>>(tc) {}                              \
-    using ::cta::test_wrapper<_fixture<T>>::expect_that;                       \
-    void run() { __VA_ARGS__ }                                                 \
-  };                                                                           \
-  static inline auto _reg_##NAME = ::cta::internal::is_regged_t(do_reg_test(   \
-      case_name, ::cta::internal::name_of_test(#NAME, typeid(Ts).name()) <<    \
-                     [](test_context &&tc) { _tb_##NAME<Ts>(tc).run(); })...);
+#define CTA_TEST_T(NAME, ...) \
+  , ::cta::internal::name_of_typed_test(#NAME) << [this] ()
 
 #define CTA_END_TESTS() }
 #define CTA_END_TESTS_F() CTA_END_TESTS()
-#define CTA_END_TESTS_TF()                                                     \
-  }                                                                            \
-  ;                                                                            \
-  }
+#define CTA_END_TESTS_TF() )){};}
 
 /// @brief Starts a new test case, serving as a container for related tests.
 /// This macro sets up the necessary infrastructure for a test suite.
@@ -584,6 +611,9 @@ template <typename T> struct formatter<::cta::_format_matcher<T>, char> {
 /// `CTA_END_TESTS()`.
 /// @warning Use this macro only once per test case; it cannot be nested.
 #define CTA_BEGIN_TESTS(NAME) CTA_BEGIN_TESTS_INTERNAL(NAME, 0)
+
+#define CTA_TYPED_TEST_INTERNAL(FIXT, TAG, ...) \
+inline static auto _cta_reg_##FIXT = ::cta::internal::instantiate_typed_tests<FIXT, ::cta::types<__VA_ARGS__>, TAG>();
 
 #define CTA_TYPED_TEST(NAME, ...)                                              \
   template struct CTA_INTERNAL_TEST_NS(NAME)::_fixt_wrap<__VA_ARGS__>;
